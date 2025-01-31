@@ -118,6 +118,7 @@ type UnifiedTypes<T> = T extends Array<QueryObserverResult<any>>
  *
  *  This operator is used to merge multiple queries into one.
  *  It will return a new base query result that will merge the results of all the queries.
+ *  If you pass the 'intersectStaleData' flag, it will also intersect unsuccessful result in case data for all queries is present.
  *
  * @example
  *
@@ -128,13 +129,25 @@ type UnifiedTypes<T> = T extends Array<QueryObserverResult<any>>
  *   intersectResults$(({ todos, posts }) => {
  *     return { ... }
  *   })
- * )
+ * );
+ *
  * @example
  *
  * const query = combineLatest([todos.result$, posts.result$]).pipe(
  *   intersectResults$(([todos, posts]) => {
  *     return { ... }
  *   })
+ * );
+ *
+ * @example
+ *
+ * const query = combineLatest({
+ *   todos: todos.result$,
+ *   posts: posts.result$,
+ * }).pipe(
+ *   intersectResults$(({ todos, posts }) => {
+ *     return { ... }
+ *   }, { intersectStaleData: true });
  * )
  */
 export function intersectResults$<
@@ -144,6 +157,7 @@ export function intersectResults$<
   R,
 >(
   mapFn: (values: UnifiedTypes<T>) => R,
+  options?: { intersectStaleData: boolean },
 ): OperatorFunction<T, QueryObserverResult<R> & { all: T }> {
   return map((values) => {
     const isArray = Array.isArray(values);
@@ -162,20 +176,14 @@ export function intersectResults$<
       refetch,
     } as unknown as QueryObserverResult<R> & { all: T };
 
-    if (mappedResult.isSuccess) {
-      if (isArray) {
-        mappedResult.data = mapFn(
-          toArray.map((r) => r.data) as UnifiedTypes<T>,
-        );
-      } else {
-        const data = Object.entries(values).reduce((acc, [key, value]) => {
+    if (mappedResult.isSuccess || (options?.intersectStaleData && toArray.every((r) => !!r.data))) {
+      const data = isArray
+        ? toArray.map((r) => r.data) as UnifiedTypes<T>
+        : Object.entries(values).reduce((acc, [key, value]) => {
           acc[key as keyof UnifiedTypes<T>] = value.data;
-
           return acc;
         }, {} as UnifiedTypes<T>);
-
-        mappedResult.data = mapFn(data);
-      }
+      mappedResult.data = mapFn(data);
     }
 
     return mappedResult;

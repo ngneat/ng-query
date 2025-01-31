@@ -26,7 +26,8 @@ type UnifiedTypes<T> = T extends Array<Signal<QueryObserverBaseResult<any>>>
  *
  *  This function is used to merge multiple signal queries into one.
  *  It will return a new base query result that will merge the results of all the queries.
- *  Note that it should be used inside injection context
+ *  Note that it should be used inside injection context.
+ *  If you pass the 'intersectStaleData' flag, it will also intersect unsuccessful result in case data for all queries is present.
  *
  * @example
  *
@@ -35,8 +36,7 @@ type UnifiedTypes<T> = T extends Array<Signal<QueryObserverBaseResult<any>>>
  *   posts: posts.result$,
  * }, ({ todos, posts }) => {
  *   return todos + posts;
- * })
- *
+ * });
  *
  * @example
  *
@@ -49,6 +49,15 @@ type UnifiedTypes<T> = T extends Array<Signal<QueryObserverBaseResult<any>>>
  *    return todoOne.title + todoTwo.title;
  *  }
  * );
+ *
+ * @example
+ *
+ * const query = intersetResults({
+ *   todos: todos.result$,
+ *   posts: posts.result$,
+ * }, ({ todos, posts }) => {
+ *   return todos + posts;
+ * }, { intersectStaleData: true });
  */
 export function intersectResults<
   T extends
@@ -58,10 +67,17 @@ export function intersectResults<
 >(
   signals: T,
   mapFn: (values: UnifiedTypes<T>) => R,
+  options?: { intersectStaleData: boolean }
 ): Signal<QueryObserverResult<R> & { all: T }> {
   const isArray = Array.isArray(signals);
   const toArray = isArray ? signals : Object.values(signals);
   const refetch = () => Promise.all(toArray.map(v => v().refetch()));
+  const intersectData = isArray
+    ? () => toArray.map((r) => r().data) as UnifiedTypes<T>
+    : () => Object.entries(signals).reduce((acc, [key, value]) => {
+        acc[key as keyof UnifiedTypes<T>] = value().data;
+        return acc;
+      }, {} as UnifiedTypes<T>);
 
   return computed(() => {
     const mappedResult = {
@@ -76,20 +92,8 @@ export function intersectResults<
       refetch,
     } as unknown as QueryObserverResult<R> & { all: T };
 
-    if (mappedResult.isSuccess) {
-      if (isArray) {
-        mappedResult.data = mapFn(
-          toArray.map((r) => r().data) as UnifiedTypes<T>,
-        );
-      } else {
-        const data = Object.entries(signals).reduce((acc, [key, value]) => {
-          acc[key as keyof UnifiedTypes<T>] = value().data;
-
-          return acc;
-        }, {} as UnifiedTypes<T>);
-
-        mappedResult.data = mapFn(data);
-      }
+    if (mappedResult.isSuccess || (options?.intersectStaleData && toArray.every((v) => !!v().data))) {
+      mappedResult.data = mapFn(intersectData());
     }
 
     return mappedResult;
